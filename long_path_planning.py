@@ -5,10 +5,7 @@ import numpy as np
 from occupancy_grid import og_coordinate, OccupancyGrid
 import rospy
 
-
-
-# TAG_X_OFFSET_FROM_CENTER = 0 #cm
-# TAG_Y_OFFSET_FROM_CENTER = 0 #cm
+AXIS_OF_ROTATION_FROM_CENTER_Y = -.09
 
 def heuristic(start:og_coordinate, goal:og_coordinate, grid_resolution:float):
         #adding a heading bonus if nearby so that it approaches parking lot straight
@@ -31,7 +28,8 @@ def is_valid_position(occupancy_grid: OccupancyGrid, car_position: og_coordinate
     grid = occupancy_grid.get_grid()
     rows, cols = grid.shape
     
-    grid_x, grid_y = occupancy_grid.get_car_footprint([car_position.x*occupancy_grid.resolution, car_position.y*occupancy_grid.resolution, car_position.heading])
+    car_center_x, car_center_y = OccupancyGrid.world_to_grid(car_position.x - AXIS_OF_ROTATION_FROM_CENTER * np.sin(car_position.heading), car_position.y + AXIS_OF_ROTATION_FROM_CENTER * np.cos(car_position.heading))
+    grid_x, grid_y = occupancy_grid.get_car_footprint([car_center_x*occupancy_grid.resolution, car_center_y*occupancy_grid.resolution, car_position.heading])
 
     if np.any(grid_x < 0) or np.any(grid_x >= cols) or np.any(grid_y < 0) or np.any(grid_y >= rows):
         return False

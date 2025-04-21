@@ -1,6 +1,7 @@
 from occupancy_grid import OccupancyGrid, og_coordinate
-from long_path_planning import path_to_driveable
+from long_path_planning import path_to_driveable, AXIS_OF_ROTATION_FROM_CENTER_Y
 import time
+FAR_PARK_Y_OFFSET = 0.2 #m
 #from dataclasses import dataclass
 #from shapely.geometry import Polygon, Point
 #from shapely.affinity import rotate, translate
@@ -210,6 +211,8 @@ class parking_orchestrator:
         #FIND THE PARKING SPACE THAT IS TOP LEFT AS THE CAR ENTERS
         #THIS IS AN og_coordinate object
         self.goal_position = self.identify_parking_space()
+        self.goal_position.y -= FAR_PARK_Y_OFFSET/self.og.resolution#OFFSET FROM WHERE WE WANT TO APPROACH THE CLOSE PARK
+
         
 
         
@@ -222,7 +225,7 @@ class parking_orchestrator:
         rospy.loginfo("goal is: "+ str(self.goal_position))
         
         t_plan_0 = time.perf_counter()
-        self.path = long_path_planning.plan(self.og, self.get_current_grid_position(), self.goal_position)
+        self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
         t_plan_1 = time.perf_counter()
         if self.path == None:
             rospy.loginfo("path_plan_failed")
@@ -279,7 +282,7 @@ class parking_orchestrator:
         max_y = int(PARKING_ENDY   / self.og.resolution)
 
         for y in range(min_y, max_y - rows + 1):
-            for x in range(min_x, max_x - cols + 1):
+            for x in reversed(range(min_x, max_x - cols + 1)):
                 area = self.og.grid[y : y + rows, x : x + cols]
                 if np.all(area == 0):
                     cx = x + cols//2
@@ -371,6 +374,20 @@ class parking_orchestrator:
 
         return og_coordinate(grid_x, grid_y, self.fiducials_dict[self.car_fiducial_num][2])
     
+    def get_front_wheel_position(self) -> og_coordinate:
+        #Get the grid coordinate pertaining to car's april tag
+        #update with fiducial wrt car body
+
+        #PREVIOUS
+        #car_x, car_y, car_heading = self.fiducials_dict[self.car_fiducial_num]
+        #grid_x, grid_y = self.og.world_to_grid(car_x - TAG_Y_OFFSET_FROM_CENTER * np.sin(car_heading), car_y + TAG_Y_OFFSET_FROM_CENTER * np.cos(car_heading))
+        #CHANGED
+        car_x, car_y, car_heading = self.fiducials_dict[self.car_fiducial_num]
+        grid_x, grid_y = self.og.world_to_grid(car_x - AXIS_OF_ROTATION_FROM_CENTER * np.sin(car_heading), car_y + AXIS_OF_ROTATION_FROM_CENTER * np.cos(car_heading))
+        
+
+        return og_coordinate(grid_x, grid_y, self.fiducials_dict[self.car_fiducial_num][2])
+
     def get_current_world_position(self):
         #Get the world coordinate of the car's center
         
