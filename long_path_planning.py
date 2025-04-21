@@ -25,6 +25,7 @@ def heuristic(start:og_coordinate, goal:og_coordinate, grid_resolution:float):
 
 def is_valid_position(occupancy_grid: OccupancyGrid, car_position: og_coordinate):
     # Check if the next position is within bounds and not occupied
+    #car position is handed as the position of the front wheels
     grid = occupancy_grid.get_grid()
     rows, cols = grid.shape
     
@@ -39,105 +40,6 @@ def is_valid_position(occupancy_grid: OccupancyGrid, car_position: og_coordinate
     else: 
         return True
 
-
-    
-# def plan(occupancy_grid: OccupancyGrid, start:og_coordinate, goal:og_coordinate):
-#     grid = occupancy_grid.get_grid()
-#     rows, cols = grid.shape
-#     open_set = []
-#     #fscore: cost of current spot + hueristic
-#     #gscore: cost from start to current spot, tie breaker to prefer simple paths
-#     print("start", start)
-#     print("goal", goal)
-#     heapq.heappush(open_set, (0 + heuristic(start, goal, occupancy_grid.resolution), 0, start))
-
-#     came_from = {}
-
-#     found_set = set()
-#     found_set.add(start)
-#     g_score = {start: 0}
-
-#     while open_set:
-#         _, current_cost, current = heapq.heappop(open_set)
-
-#         if current in found_set:
-#             continue
-            
-#         found_set.add(current)
-#         # #rospy.loginfo(len(open_set))
-#         if (current.x == goal.x and current.y == goal.y and abs(current.heading - goal.heading) < .2):
-#             # Reconstruct path
-#             path = [current]
-#             while current in came_from:
-#                 current = came_from[current]
-#                 path.append(current)  
-#             #rospy.loginfo(path_to_driveable(remove_collinear(path[::-1]), occupancy_grid)) 
-#             return remove_collinear(path[::-1])  # Reverse path
-#             #return path[::-1]  # Reverse path
-
-#         neighbors = []
-#         for dx, dy in [(-1,-1), (0,-1),(1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]:
-#             nh = np.arctan2(dy, dx)
-#             nx, ny = current.x + dx, current.y + dy
-
-#             new_og_coordinate = og_coordinate(nx, ny, nh)
-#             # #rospy.loginfo(CAR_LENGTH/occupancy_grid.get_resolution())
-#             if new_og_coordinate not in found_set and 0 <= nx < cols and 0 <= ny < rows and grid[ny, nx] == 0 :
-#                 if is_valid_position(occupancy_grid, CAR_LENGTH/occupancy_grid.get_resolution(), CAR_WIDTH/occupancy_grid.get_resolution(), new_og_coordinate):
-#                     # found_set.add(new_og_coordinate)
-#                     neighbors.append(new_og_coordinate)
-#                     #print("new_og_coordinate", new_og_coordinate)
-
-#         for neighbor in neighbors:
-#             #print("checking valid neighbor")
-#             turn_penalty = 0
-#             if current.heading != neighbor.heading:
-#                 turn_penalty = 1
-
-#             tentative_g = current_cost + 1 + turn_penalty
-#             if neighbor not in g_score or tentative_g < g_score[neighbor]:
-#                 g_score[neighbor] = tentative_g
-#                 f_score = tentative_g + heuristic(neighbor, goal, occupancy_grid.resolution)
-#                 heapq.heappush(open_set, (f_score, tentative_g, neighbor))
-#                 came_from[neighbor] = current
-
-#     return None  # No path found
-
-
-    
-# def remove_collinear(plan):
-#         # Remove collinear points from the path, leave 3 at each corner
-#         #input is list of og coordinates
-#     if len(plan) < 3:
-#         return plan
-
-#     filtered_plan = [plan[0]]
-#     for i in range(1, len(plan) - 1):
-#         og_p_1 = plan[i - 1]#occupancy grid points
-#         og_p_2 = plan[i]
-#         og_p_3 = plan[i + 1]
-
-#         next_to_turn = False
-
-#         if (i + 2) < len(plan):
-#             og_p_4 = plan[i + 2]
-
-#             if og_p_4.heading == og_p_3.heading:
-#                 next_to_turn = True
-
-#         if (i -2) > 0:
-#             og_p_0 = plan[i - 2]
-
-#             if og_p_0.heading == og_p_1.heading:
-#                 next_to_turn = True
-
-    
-#         # Check if p2 is collinear with p1 and p3 or special case to leave on either side of corner
-#         if (og_p_1.heading == og_p_2.heading and og_p_2.heading == og_p_3.heading) or next_to_turn:
-#             filtered_plan.append(og_p_2)
-
-#     filtered_plan.append(plan[-1])
-#     return filtered_plan
 def plan(occupancy_grid: OccupancyGrid, start: og_coordinate, goal: og_coordinate):
     grid = occupancy_grid.get_grid()
     rows, cols = grid.shape
@@ -239,10 +141,10 @@ def remove_collinear(plan:np.ndarray):
         is_collinear = (og_p_2.x - og_p_1.x) * (og_p_3.y - og_p_2.y) == (og_p_2.y - og_p_1.y) * (og_p_3.x - og_p_2.x)
 
         # Check if p2 is part of a turn (heading changes)
-        is_turn = og_p_1.heading != og_p_2.heading or og_p_2.heading != og_p_3.heading
+        # is_turn = og_p_1.heading != og_p_2.heading or og_p_2.heading != og_p_3.heading
 
         # Keep the point if it's not collinear or if it's part of a turn
-        if not is_collinear or is_turn:
+        if not is_collinear:# or is_turn:
             filtered_plan.append(og_p_2)
 
         # Ensure the point before and after a turn is preserved
@@ -260,7 +162,7 @@ def path_to_driveable(path: list, occupancy_grid: OccupancyGrid):
         return []  # If the path has fewer than 2 points, return an empty list.
 
     driveable_path = []
-
+    heading_arrived_at_goal = 0
     for i in range(1, len(path)):
         # Current and previous points
         prev_point = path[i - 1]
@@ -271,11 +173,20 @@ def path_to_driveable(path: list, occupancy_grid: OccupancyGrid):
 
         # Calculate the heading change
         heading_change = curr_point.heading - prev_point.heading
-
+        heading_arrived_at_goal = curr_point.heading
         # Normalize the heading change to the range [-π, π]
         heading_change = (heading_change + np.pi) % (2 * np.pi) - np.pi
 
         # Append the tuple (heading_change, distance_change) to the driveable path
         driveable_path.append((heading_change, distance_change))
 
+    heading_change = -np.pi -  heading_arrived_at_goal
+    final_heading_change = (heading_change + np.pi) % (2 * np.pi) - np.pi
+  
+
+        # Normalize the heading change to the range [-π, π]
+       
+
+    if abs(heading_change) <= .1
+        driveable_path.append((heading_change, 0))
     return driveable_path
