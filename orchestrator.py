@@ -156,18 +156,10 @@ class parking_orchestrator:
         self.path = None
         rospy.loginfo("\nsensor data: " + str(self.sensor_data))
 
-        #SET THE VISUALIZING PARAMETERS HERE
-
-        
-
-        
-        # self.instructions = self.get_long_path()
-        #self.instructions = self.get_short_path()
-        # rospy.loginfo("\n\nPATH INSTRUCTIONS (dh, dforward)" + str(self.instructions))
-    def run_live_no_pc(self):
+    def run_live(self, use_pc=True, use_onboard = False):
         plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(6,6))
-        self.refresh_no_onboard(show_pc = False)
+        self.refresh(use_pc = use_pc, use_onboard = use_onboard)
         
         self.grid_img = self.ax.imshow(
             self.og.get_grid(), cmap='Greys', origin='lower'
@@ -193,44 +185,24 @@ class parking_orchestrator:
         )
 
         while True:
-            self.refresh_no_onboard(show_pc = False)
-            self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
-            self.update_constant_visual(show_pc=False, show_path=True, show_sensors=True)
-
-    def run_live(self):
-        plt.ion()
-        self.fig, self.ax = plt.subplots(figsize=(6,6))
-        self.refresh_no_onboard()
-
-        self.grid_img = self.ax.imshow(
-            self.og.get_grid(), cmap='Greys', origin='lower'
-        )
-        self.footprint_scatter = self.ax.scatter([], [], color='red',   s=5)
-        self.goal_scatter      = self.ax.scatter([], [], color='green', s=5)
-        self.path_scatter      = self.ax.scatter([], [], color='blue',  s=50)
-        
-        x1, xn = int(PARKING_STARTX/self.og.resolution), (PARKING_ENDX/self.og.resolution)
-        y1, yn = int(PARKING_STARTY/self.og.resolution), (PARKING_ENDY/self.og.resolution)
-        self.parking_scatter  = self.ax.scatter(
-            [x1,x1,xn,xn], [y1,yn,y1,yn], color='orange', s=50
-        )
-
-        while True:
-            self.refresh_no_onboard()
+            self.refresh(use_pc = use_pc, use_onboard = use_onboard)
             if self.goal_position != None:
+                rospy.loginfo("Planning Path")
                 self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
-            self.update_constant_visual(show_path=True)
+                
+            else:
+                rospy.loginfo("COULD NOT FIND A GOAL POSITION")
+                self.path = None
+            self.update_constant_visual(use_pc=use_pc, show_path=True, show_sensors=use_onboard)
 
     def run_simulation(self):
-        self.refresh_no_onboard()
+        self.refresh()
         
         self.visualize_path_and_og('grid', False, True)
         rospy.loginfo("starting path plan for goal: " + str(self.goal_position))
         self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
         self.visualize_path_and_og('full_grid_and_path', True, True)
-        #add the last heading change
-        # t_plan_1 = time.perf_counter()
-        
+
         if self.path == None:
             rospy.loginfo("path_plan_failed")
             return
@@ -238,15 +210,11 @@ class parking_orchestrator:
             rospy.loginfo("running simulation")
             create_sim(self.og, self.goal_position, self.path)
 
-
-        
-
-    def refresh_no_onboard(self, show_pc = True):
+    def refresh(self, use_pc = True, use_onboard = False):
         refresh_start= time.perf_counter()#start timer
-        
-        
+    
         self.fiducials_dict = global_fiducials_dict
-        if show_pc:
+        if use_pc:
             self.point_cloud = global_point_cloud
         else:
             self.point_cloud= []
@@ -256,172 +224,15 @@ class parking_orchestrator:
         self.obstacle_fiducials_list = [value for key, value in self.fiducials_dict.items() if key != self.car_fiducial_num and key not in self.non_relevant_tags]
         self.og.update_grid_from_fiducials(self.obstacle_fiducials_list)
         self.og.remove_car_footprint(self.fiducials_dict[self.car_fiducial_num])
+
+        #TODO
+        # if use_onboard:
+        #     self.update_grid_from_onboard()
+
         self.goal_position = self.identify_parking_space()
         refresh_end = time.perf_counter()#start timer
         
         rospy.loginfo(f"\n\n\nRefreshing Occupancy took {(refresh_end - refresh_start):.3f} seconds\n\n")
-
-    def get_long_path(self):
-        #point_cloud: combined 03d point cloud of the environment
-        #fiducials_dict: dictionary of fiducials with their positions as 3D numpy array, should include the goal car
-
-        rospy.loginfo(f"Using sensor data in long-path planning: {self.sensor_data}")
-        
-        self.fiducials_dict = global_fiducials_dict
-        self.point_cloud = global_point_cloud
-        t_og_0 = time.perf_counter()
-        PointCloudParser = point_cloud_parser.PointCloudParser(self.point_cloud)
-        self.og = OccupancyGrid(PointCloudParser.get_point_cloud(), resolution=.01)
-        rospy.loginfo("\n Pointcloud Assigned to Occupancy Grid \n" )
-        self.visualize_path_and_og("1:initial_og", False, False)
-        #CARS THAT ARE NOT THE ACTIVELY PARKING CAR
-        self.obstacle_fiducials_list = [value for key, value in self.fiducials_dict.items() if key != self.car_fiducial_num and key not in self.non_relevant_tags]
-        self.og.update_grid_from_fiducials(self.obstacle_fiducials_list)
-        rospy.loginfo("\n GRID UPDATED WITH FIDUCIALS\n" )
-        self.visualize_path_and_og("2:other_car_fiducials_overlayed", False, False)
-    
-
-        #REMOVES THE FOOTPRINT PRESENT IN THE POINTCLOUD FROM OUR GOAL CAR
-        self.og.remove_car_footprint(self.fiducials_dict[self.car_fiducial_num])
-        rospy.loginfo("current grid position: " + str(self.get_current_grid_position()))
-        rospy.loginfo("current world position: " + str(self.get_current_world_position()))
-        self.visualize_path_and_og("3:moving_car_removed", False, False)
-
-
-        #FIND THE PARKING SPACE THAT IS TOP LEFT AS THE CAR ENTERS
-        #THIS IS AN og_coordinate object
-        self.goal_position = self.identify_parking_space()
-        self.goal_position.y -= int(FAR_PARK_Y_OFFSET/self.og.resolution)#OFFSET FROM WHERE WE WANT TO APPROACH THE CLOSE PARK
-        rospy.loginfo("\n GOAL POSITION CALCULATED: " + str(self.goal_position)+"\n" )
-
-        self.visualize_path_and_og("4:current_and_goal", False, True)
-        rospy.loginfo("current is: "+ str(self.get_current_grid_position()))
-        rospy.loginfo("goal is: "+ str(self.goal_position))
-        # np.savetxt("occupancy_grid.csv", self.og.grid, fmt="%d", delimiter=",") #To Get Test Data
-
-
-    
-        t_plan_0 = time.perf_counter()
-        self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
-        
-        #add the last heading change
-        t_plan_1 = time.perf_counter()
-        
-        if self.path == None:
-            rospy.loginfo("path_plan_failed")
-            return
-
-        self.next_instructions = path_to_driveable(self.path,self.og)
-        rospy.loginfo("\n NEXT MOTION COMMAND: heading_change" + str(self.next_instructions[0]) + "distance change: " + str(self.next_instructions[1])+"\n")
-        
-        rospy.loginfo("\n PATH PLANNED:" +str(self.path)+"\n" )
-        rospy.loginfo(f"\n\nOccupancy Grid Building took {(t_plan_0 - t_og_0):.3f} seconds")
-        rospy.loginfo(f"\n\n\nPlanning took {(t_plan_1 - t_plan_0):.3f} seconds\n\n")
-
-        if self.path is not None:
-            self.visualize_path_and_og("5:grid_with_self_and_path", True, True)
-
-        return self.next_instructions
-
-    def get_short_path(self):
-        #point_cloud: combined 03d point cloud of the environment
-        #fiducials_dict: dictionary of fiducials with their positions as 3D numpy array, should include the goal car
-        # global global_sensor_data, global_point_cloud, global_fiducials_dict
-
-        
-        self.fiducials_dict = global_fiducials_dict
-        self.point_cloud = global_point_cloud
-        self.sensor_data = global_sensor_data  
-        rospy.loginfo(f"Using sensor data in short-path planning: {self.sensor_data}")
-        t_og_0 = time.perf_counter()
-
-        
-        PointCloudParser = point_cloud_parser.PointCloudParser(self.point_cloud)
-        self.og = OccupancyGrid(PointCloudParser.get_point_cloud(), resolution=.005)
-        self.visualize_path_and_og("1:initial_og", False, False)
-    
-        #
-        rospy.loginfo("\n Pointcloud Assigned to Occupancy Grid \n" )
-
-        #CARS THAT ARE NOT THE ACTIVELY PARKING CAR
-        self.obstacle_fiducials_list = [value for key, value in self.fiducials_dict.items() if key != self.car_fiducial_num and key not in self.non_relevant_tags]
-        self.og.update_grid_from_fiducials(self.obstacle_fiducials_list)
-        rospy.loginfo("\n GRID UPDATED WITH FIDUCIALS\n" )
-        self.visualize_path_and_og("2:other_car_fiducials_overlayed", False, False)
-    
-
-        #REMOVES THE FOOTPRINT PRESENT IN THE POINTCLOUD FROM OUR GOAL CAR
-        self.og.remove_car_footprint(self.fiducials_dict[self.car_fiducial_num])
-
-
-        #TODO SENSOR DICT {x,y, heading}
-        # current_sensor_dict = global_sensor_data
-
-        
-        for name, item in self.sensor_data:
-            x_offset = 0
-            y_offset = 0
-            heading_change = 0
-            if name == 'left':#cm
-                x_offset = .08
-                y_offset = -.05
-                heading_change = np.pi/2
-            elif name == 'frontleft':
-                x_offset = -.0575
-                y_offset = .18
-                heading_change = np.pi/6
-            elif name == "frontright":
-                x_offset = .0575
-                y_offset = .18
-                heading_change = -np.pi/6
-
-            car_center = self.get_current_world_position()
-            cx = x + x_offset*np.cos(car_center[2]) - y_offset*np.sin(car_center[2])
-            cy =y + x_offset*np.sin(car_center[2]) + y_offset*np.cos(car_center[2])
-            ch = car_center[2] + heading_change
-
-            self.og.update_grid_from_onboard(np.array([cx,cy,ch ], value /100))
-
-        rospy.loginfo("current grid position: " + str(self.get_current_grid_position()))
-        rospy.loginfo("current world position: " + str(self.get_current_world_position()))
-        self.visualize_path_and_og("3:moving_car_removed", False, False)
-
-
-        #FIND THE PARKING SPACE THAT IS TOP LEFT AS THE CAR ENTERS
-        #THIS IS AN og_coordinate object
-        self.goal_position = self.identify_parking_space()
-        # self.goal_position.y -= int(FAR_PARK_Y_OFFSET/self.og.resolution)#OFFSET FROM WHERE WE WANT TO APPROACH THE CLOSE PARK
-        rospy.loginfo("\n GOAL POSITION CALCULATED: " + str(self.goal_position)+"\n" )
-
-        self.visualize_path_and_og("4:current_and_goal", False, True)
-        self.visualize_path_and_og("4.5:current_and_goal_and_sensor_data", False, True, True)
-        rospy.loginfo("current is: "+ str(self.get_current_grid_position()))
-        rospy.loginfo("goal is: "+ str(self.goal_position))
-        # np.savetxt("occupancy_grid.csv", self.og.grid, fmt="%d", delimiter=",") #To Get Test Data
-
-
-    
-        t_plan_0 = time.perf_counter()
-        self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
-        t_plan_1 = time.perf_counter()
-
-        
-        if self.path == None:
-            rospy.loginfo("path_plan_failed")
-            return
-
-        self.next_instructions = path_to_driveable(self.path,self.og)
-        rospy.loginfo("\n NEXT MOTION COMMAND: heading_change" + str(self.next_instructions[0]) + "distance change: " + str(self.next_instructions[1])+"\n")
-        
-        rospy.loginfo("\n PATH PLANNED:" +str(self.path)+"\n" )
-        rospy.loginfo(f"Occupancy Grid Building took {(t_plan_0 - t_og_0):.3f} seconds")
-        rospy.loginfo(f"Planning took {(t_plan_1 - t_plan_0):.3f} seconds")
-
-        if self.path is not None:
-            self.visualize_path_and_og("5:grid_with_self_and_path", True, True)
-
-        return self.next_instructions
-
 
     def identify_parking_space(self):
         #TODO GOAL POSITION returned should be the front  wheel positoni
@@ -442,34 +253,13 @@ class parking_orchestrator:
                     h = np.round(-np.pi,1)
 
                     front_wheel_x, front_wheel_y = self.og.world_to_grid(cx*self.og.resolution - AXIS_OF_ROTATION_FROM_CENTER_Y * np.sin(goal_heading), cy*self.og.resolution+ AXIS_OF_ROTATION_FROM_CENTER_Y * np.cos(goal_heading))
-        #TODO
-                    #return_cord = og_coordinate(cx, cy, h)
                     return_cord = og_coordinate(front_wheel_x, front_wheel_y, h)
                     return return_cord
 
         return None
 
-    # def run(self):
-    #     while(self.reached_goal == False):
-
-    #         #PULL CURRENTLY EXCECUTING INFORMATION FROM ROS
-    #         # if self.currently_executing == False and self.currently_updating == False:
-
-
-    #             #PULL THIS INFORMATION FROM ROS
-    #             #self.refresh(point_cloud, fiducials_dict)
-
-
-                
-                
-    #             self.send_next_motion_command()
-
-    #         else:
-    #             #check if the motion command has been completed
-    #             continue
-
-    def update_constant_visual(self, show_path=False, show_pc = True, show_sensors=False):
-        if show_pc:
+    def update_constant_visual(self, show_path=False, use_pc = True, show_sensors=False):
+        if use_pc:
             self.grid_img.set_data(self.og.get_grid())
         else:
             self.og.grid = np.zeros(self.og.get_grid().shape)
@@ -487,16 +277,11 @@ class parking_orchestrator:
                 ys.append(og_cord.y)
             path_pts = np.column_stack([xs, ys])
             self.path_scatter.set_offsets(path_pts)
-            
-                # ax.scatter(x, y, color='blue', s=50)  # Note: (x, y) -> (row, col)
 
-        
         gridx,gridy = self.og.get_car_footprint_from_tag_pos(self.fiducials_dict[self.car_fiducial_num], res_increase=.25)
         footprint_pts = np.column_stack([gridx, gridy])
         self.footprint_scatter.set_offsets(footprint_pts)
-        # for i in range(len(gridy)):
-        #     x,y = gridx[i], gridy[i]
-        #     ax.scatter(x, y, color='red', s=5)
+
 
         if(self.goal_position != None):
             #current goal position describes front wheel location, need it to describe tag locations
@@ -509,8 +294,7 @@ class parking_orchestrator:
             self.goal_scatter.set_offsets(goal_pts)
 
         if show_sensors:
-            sensor_data = {'frontleft':.1, 'frontright':.1, 'left': .1}
-            for name, item in sensor_data.items():
+            for name, item in self.sensor_data.items():
                 x_offset = 0
                 y_offset = 0
                 heading_change = 0
@@ -532,11 +316,10 @@ class parking_orchestrator:
                 cx = car_center[0] + x_offset*np.cos(car_center[2]) - y_offset*np.sin(car_center[2])
                 cy =car_center[1] + x_offset*np.sin(car_center[2]) + y_offset*np.cos(car_center[2])
                 ch = car_center[2] + heading_change 
-                #done because sensor data reported in cm
+
                 contact_x = (cx + (item) * np.cos(ch))
                 contact_y = (cy + (item) * np.sin(ch))
                 
-                # Update the occupancy grid based on the onboard sensor position
 
                 sensor_grid_x = int(np.round(cx / self.og.resolution))
                 sensor_grid_y = int(np.round(cy / self.og.resolution))
@@ -550,14 +333,11 @@ class parking_orchestrator:
                         [sensor_grid_x, contact_grid_x],
                         [sensor_grid_y, contact_grid_y]
                     )
-                # sensor_grid_x, sensor_grid_y = self.og.world_to_grid(cx, cy)
-                # contact_grid_x, contact_grid_y = self.og.world_to_grid(contact_x, contact_y)
-                # rospy.loginfo(contact_grid_x, contact_grid_y)
-                rospy.loginfo("\nSENSOR X grid: " + str(sensor_grid_x))
-                rospy.loginfo("\nSENSOR Y grid: " + str(sensor_grid_y))
-                rospy.loginfo("\nCONTACT X grid: " + str(contact_grid_x))
-                rospy.loginfo("\nCONTACT Y grid: " + str(contact_grid_y))
-                # self.ax.plot([sensor_grid_x, contact_grid_x], [sensor_grid_y, contact_grid_y])
+
+                # rospy.loginfo("\nSENSOR X grid: " + str(sensor_grid_x))
+                # rospy.loginfo("\nSENSOR Y grid: " + str(sensor_grid_y))
+                # rospy.loginfo("\nCONTACT X grid: " + str(contact_grid_x))
+                # rospy.loginfo("\nCONTACT Y grid: " + str(contact_grid_y))
 
 
         self.fig.canvas.draw_idle()
@@ -662,8 +442,6 @@ class parking_orchestrator:
 
     def get_current_grid_position(self) -> og_coordinate:
         #Get the grid coordinate pertaining to car's april tag
-        
-        #update with fiducial wrt car body
 
         car_x, car_y, car_heading = self.fiducials_dict[self.car_fiducial_num]
         grid_x, grid_y = self.og.world_to_grid(car_x - TAG_Y_OFFSET_FROM_CENTER * np.sin(car_heading), car_y + TAG_Y_OFFSET_FROM_CENTER * np.cos(car_heading))
@@ -724,10 +502,8 @@ def main():
                 global_sensor_data
             )
 
-
-            #orchestrator.run_live()
             #orchestrator.run_simulation()
-            orchestrator.run_live_no_pc()
+            orchestrator.run_live(use_pc=True, use_onboard = True)
             orchestrator_made = True
             break
         rate.sleep()
