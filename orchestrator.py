@@ -148,7 +148,7 @@ class parking_orchestrator:
         self.car_fiducial_num = car_fiducial_num
         self.fiducials_dict = global_fiducials_dict
         self.point_cloud = global_point_cloud
-        self.sensor_data = global_sensor_data
+        self.sensor_data = sensor_data = {'frontleft':.1, 'frontright':.1, 'left': .1}#global_sensor_data
         self.goal_position = None
         self.non_relevant_tags = set([0,14,16])
         self.planned_short = False
@@ -168,14 +168,24 @@ class parking_orchestrator:
         plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(6,6))
         self.refresh_no_onboard(show_pc = False)
-
+        
         self.grid_img = self.ax.imshow(
             self.og.get_grid(), cmap='Greys', origin='lower'
         )
         self.footprint_scatter = self.ax.scatter([], [], color='red',   s=5)
         self.goal_scatter      = self.ax.scatter([], [], color='green', s=5)
         self.path_scatter      = self.ax.scatter([], [], color='blue',  s=50)
-        
+        self.sensor_lines = {}
+        for name in self.sensor_data:
+        # 'o-' means a circle marker plus a line
+            line, = self.ax.plot([], [], 'o-',
+                                markerfacecolor='orange',
+                                markeredgecolor='orange',
+                                markersize=5,     # approx s=50 in scatter
+                                linewidth=1,
+                                color='orange')
+            self.sensor_lines[name] = line
+
         x1, xn = int(PARKING_STARTX/self.og.resolution), (PARKING_ENDX/self.og.resolution)
         y1, yn = int(PARKING_STARTY/self.og.resolution), (PARKING_ENDY/self.og.resolution)
         self.parking_scatter  = self.ax.scatter(
@@ -185,7 +195,7 @@ class parking_orchestrator:
         while True:
             self.refresh_no_onboard(show_pc = False)
             self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
-            self.update_constant_visual(show_pc=False, show_path=True)
+            self.update_constant_visual(show_pc=False, show_path=True, show_sensors=True)
 
     def run_live(self):
         plt.ion()
@@ -245,12 +255,8 @@ class parking_orchestrator:
         self.og = OccupancyGrid(PointCloudParser.get_point_cloud(), resolution=.01)
         self.obstacle_fiducials_list = [value for key, value in self.fiducials_dict.items() if key != self.car_fiducial_num and key not in self.non_relevant_tags]
         self.og.update_grid_from_fiducials(self.obstacle_fiducials_list)
-        # self.visualize_path_and_og("2:other_car_fiducials_overlayed", False, False)
         self.og.remove_car_footprint(self.fiducials_dict[self.car_fiducial_num])
         self.goal_position = self.identify_parking_space()
-        # self.goal_position.y -= int(FAR_PARK_Y_OFFSET/self.og.resolution)#OFFSET FROM WHERE WE WANT TO APPROACH THE CLOSE PARK
-        # self.visualize_path_and_og("4:current_and_goal", False, True)
-
         refresh_end = time.perf_counter()#start timer
         
         rospy.loginfo(f"\n\n\nRefreshing Occupancy took {(refresh_end - refresh_start):.3f} seconds\n\n")
@@ -462,9 +468,7 @@ class parking_orchestrator:
     #             #check if the motion command has been completed
     #             continue
 
-    def update_constant_visual(self, show_path=False, show_pc = True):
-        
-
+    def update_constant_visual(self, show_path=False, show_pc = True, show_sensors=False):
         if show_pc:
             self.grid_img.set_data(self.og.get_grid())
         else:
@@ -503,17 +507,58 @@ class parking_orchestrator:
             gridx,gridy = self.og.get_car_footprint_from_center(center_world_pos, res_increase=.25)
             goal_pts = np.column_stack([gridx, gridy])
             self.goal_scatter.set_offsets(goal_pts)
-            # for i in range(len(gridy)):
-            #     x,y = gridx[i], gridy[i]
-            #     ax.scatter(x, y, color='green', s=5)
 
-            # x1, xn = int(PARKING_STARTX/self.og.resolution), (PARKING_ENDX/self.og.resolution)
-            # y1, yn = int(PARKING_STARTY/self.og.resolution), (PARKING_ENDY/self.og.resolution)
-        
-            # ax.scatter(x1, y1, color='orange', s=50)
-            # ax.scatter(x1, yn, color='orange', s=50)
-            # ax.scatter(xn, y1, color='orange', s=50)
-            # ax.scatter(xn, yn, color='orange', s=50)
+        if show_sensors:
+            sensor_data = {'frontleft':.1, 'frontright':.1, 'left': .1}
+            for name, item in sensor_data.items():
+                x_offset = 0
+                y_offset = 0
+                heading_change = 0
+
+                if name == 'left':
+                    x_offset = -.08
+                    y_offset = -.05
+                    heading_change = np.pi/2 +np.pi/2
+                elif name == 'frontleft':
+                    x_offset = -.0575
+                    y_offset = .18
+                    heading_change = np.pi/6 +np.pi/2
+                elif name == "frontright":
+                    x_offset = .0575
+                    y_offset = .18
+                    heading_change = -np.pi/6 +np.pi/2
+
+                car_center = self.get_current_world_position()
+                cx = car_center[0] + x_offset*np.cos(car_center[2]) - y_offset*np.sin(car_center[2])
+                cy =car_center[1] + x_offset*np.sin(car_center[2]) + y_offset*np.cos(car_center[2])
+                ch = car_center[2] + heading_change 
+                #done because sensor data reported in cm
+                contact_x = (cx + (item) * np.cos(ch))
+                contact_y = (cy + (item) * np.sin(ch))
+                
+                # Update the occupancy grid based on the onboard sensor position
+
+                sensor_grid_x = int(np.round(cx / self.og.resolution))
+                sensor_grid_y = int(np.round(cy / self.og.resolution))
+
+                contact_grid_x = int(np.round(contact_x / self.og.resolution))
+                contact_grid_y = int(np.round(contact_y / self.og.resolution))
+
+                line = self.sensor_lines.get(name)
+                if line:
+                    line.set_data(
+                        [sensor_grid_x, contact_grid_x],
+                        [sensor_grid_y, contact_grid_y]
+                    )
+                # sensor_grid_x, sensor_grid_y = self.og.world_to_grid(cx, cy)
+                # contact_grid_x, contact_grid_y = self.og.world_to_grid(contact_x, contact_y)
+                # rospy.loginfo(contact_grid_x, contact_grid_y)
+                rospy.loginfo("\nSENSOR X grid: " + str(sensor_grid_x))
+                rospy.loginfo("\nSENSOR Y grid: " + str(sensor_grid_y))
+                rospy.loginfo("\nCONTACT X grid: " + str(contact_grid_x))
+                rospy.loginfo("\nCONTACT Y grid: " + str(contact_grid_y))
+                # self.ax.plot([sensor_grid_x, contact_grid_x], [sensor_grid_y, contact_grid_y])
+
 
         self.fig.canvas.draw_idle()
         plt.pause(0.01)
