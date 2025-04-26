@@ -6,7 +6,7 @@ import rospy
 
 X_DIMENSION = 1.65
 Y_DIMENSION = 2.65
-FLOOR_OFFSET = 0.06
+FLOOR_OFFSET = 0.04
 
 # X_origin_offset = .45
 # Y_origin_offset = .69

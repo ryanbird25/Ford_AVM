@@ -63,56 +63,82 @@ class OccupancyGrid():
         grid_y = int(np.round(y / self.resolution))
         return grid_x, grid_y
     
-    def get_car_footprint(self, car_position, offset = 0, res_increase=1):
-            #car position is 3 item array
-            #input is global position of the tag
-            car_x, car_y, car_heading = car_position[0], car_position[1], car_position[2]
-            # rospy.loginfo("Entered Get Footprint")
-            # rospy.loginfo(car_x)
-            # rospy.loginfo(car_y)
-            #TODO I think the fact that y is actually forward is cause a problem here
-            # car_x_center = car_x + TAG_X_OFFSET_FROM_CENTER*np.sin(np.radians(car_heading))
-            # car_y_center = car_y + TAG_Y_OFFSET_FROM_CENTER*np.cos(np.radians(car_heading)) 
-            # Apply tag offset: since Y is forward, adjust accordingly
-            car_x_center = car_x - TAG_Y_OFFSET_FROM_CENTER * np.sin(car_heading)
-            car_y_center = car_y + TAG_Y_OFFSET_FROM_CENTER * np.cos(car_heading)
-            # rospy.loginfo("updated car center")
-            # rospy.loginfo(car_x_center)
-            # rospy.loginfo(car_y_center)
-            dx = np.arange(-CAR_WIDTH / 2 - offset, CAR_WIDTH / 2 + offset + self.resolution, self.resolution/res_increase)
-            dy = np.arange(-CAR_LENGTH / 2 - offset, CAR_LENGTH / 2 + offset + self.resolution, self.resolution/res_increase)
+    def get_car_footprint_from_tag_pos(self, car_position, offset = 0, res_increase=1):
+        #car position is 3 item array
+        #input is global position of the tag
+        car_x, car_y, car_heading = car_position[0], car_position[1], car_position[2]
 
-            dx, dy = np.meshgrid(dx, dy)
+        car_x_center = car_x - TAG_Y_OFFSET_FROM_CENTER * np.sin(car_heading)
+        car_y_center = car_y + TAG_Y_OFFSET_FROM_CENTER * np.cos(car_heading)
 
-            dx = dx.flatten()
-            dy = dy.flatten()
+        dx = np.arange(-CAR_WIDTH / 2 - offset, CAR_WIDTH / 2 + offset + self.resolution, self.resolution/res_increase)
+        dy = np.arange(-CAR_LENGTH / 2 - offset, CAR_LENGTH / 2 + offset + self.resolution, self.resolution/res_increase)
 
-            # Apply rotation based on the car's heading
-            rotated_dx = (dx * np.cos(car_heading)) - (dy * np.sin(car_heading))
-            rotated_dy = (dx * np.sin(car_heading)) + (dy * np.cos(car_heading))
+        dx, dy = np.meshgrid(dx, dy)
+
+        dx = dx.flatten()
+        dy = dy.flatten()
+
+        # Apply rotation based on the car's heading
+        rotated_dx = (dx * np.cos(car_heading)) - (dy * np.sin(car_heading))
+        rotated_dy = (dx * np.sin(car_heading)) + (dy * np.cos(car_heading))
 
 
-            rotated_dx += car_x_center
-            rotated_dy += car_y_center
-            # Calculate the absolute grid positions
-            grid_x = np.round(rotated_dx/self.resolution).astype(int)
-            grid_y = np.round(rotated_dy/self.resolution).astype(int)
-            # rospy.loginfo("exiting Get Footprint")
-            return grid_x, grid_y
+        rotated_dx += car_x_center
+        rotated_dy += car_y_center
+        # Calculate the absolute grid positions
+        grid_x = np.round(rotated_dx/self.resolution).astype(int)
+        grid_y = np.round(rotated_dy/self.resolution).astype(int)
+        # rospy.loginfo("exiting Get Footprint")
+        return grid_x, grid_y
+
+    def get_car_footprint_from_center(self, car_position, offset = 0, res_increase=1):
+        #car position is 3 item array
+        #input is global position of the tag
+        car_x_center, car_y_center, car_heading = car_position[0], car_position[1], car_position[2]
+
+        dx = np.arange(-CAR_WIDTH / 2 - offset, CAR_WIDTH / 2 + offset + self.resolution, self.resolution/res_increase)
+        dy = np.arange(-CAR_LENGTH / 2 - offset, CAR_LENGTH / 2 + offset + self.resolution, self.resolution/res_increase)
+
+        dx, dy = np.meshgrid(dx, dy)
+
+        dx = dx.flatten()
+        dy = dy.flatten()
+
+        # Apply rotation based on the car's heading
+        rotated_dx = (dx * np.cos(car_heading)) - (dy * np.sin(car_heading))
+        rotated_dy = (dx * np.sin(car_heading)) + (dy * np.cos(car_heading))
+
+
+        rotated_dx += car_x_center
+        rotated_dy += car_y_center
+        # Calculate the absolute grid positions
+        grid_x = np.round(rotated_dx/self.resolution).astype(int)
+        grid_y = np.round(rotated_dy/self.resolution).astype(int)
+        # rospy.loginfo("exiting Get Footprint")
+        return grid_x, grid_y
     
     def update_grid_from_fiducials(self, fiducials_poses: list):
         # Update the occupancy grid based on fiducials
         for pose in fiducials_poses:
-            grid_x, grid_y = self.get_car_footprint(pose)
-            self.grid[grid_y, grid_x] = 1
+            xs, ys = self.get_car_footprint_from_tag_pos(pose)
+
+            n_rows, n_cols = self.grid.shape
+        # build a mask of only those indices that lie within [0..shape-1]
+            valid = (xs >= 0) & (xs < n_cols) & (ys >= 0) & (ys < n_rows)
+            self.grid[ys[valid], xs[valid]] = 1
 
     def remove_car_footprint(self, car_fiducial_position):
         # Clear the car footprint from the occupancy grid, input is fiducial in world space
         rospy.loginfo("Car Removed from fiducial position: "+ str(car_fiducial_position))
         # rospy.loginfo(str(get_current_world_position()))
         # rospy.loginfo(str(get_current_grid_position()))
-        grid_x, grid_y = self.get_car_footprint(car_fiducial_position, .05, 4)
-        self.grid[grid_y, grid_x] = 0
+        xs, ys = self.get_car_footprint_from_tag_pos(car_fiducial_position, .1, 4)
+
+        n_rows, n_cols = self.grid.shape
+        # build a mask of only those indices that lie within [0..shape-1]
+        valid = (xs >= 0) & (xs < n_cols) & (ys >= 0) & (ys < n_rows)
+        self.grid[ys[valid], xs[valid]] = 0
 
 
     def update_grid_from_pointcloud(self, point_cloud):
@@ -125,19 +151,51 @@ class OccupancyGrid():
             if 0 <= y < self.grid.shape[0] and 0 <= x < self.grid.shape[1]:
                 self.grid[y][x] = 1
 
+    def bresenham(self, x0, y0, x1, y1):
+        points = []
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
 
-    def update_grid_from_onboard(self, sensor_dict):
-        #sensor_dict of type {sensor_name: [sensor_position(x,y,heading array), sensor_value]}
-        for sensor_name, sensor_values in sensor_dict.items():
-            sensor_position = sensor_values[0]
-            sensor_distance_reading = sensor_values[1]
+        while True:
+            points.append((x0, y0))
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x0 += sx
+            if e2 < dx:
+                err += dx
+                y0 += sy
+
+        return points
+
+    def update_grid_from_onboard(self, sensor_position, sensor_val):
+        #sensor_dict of type [(sensor_position(x,y,heading array), sensor_value)]
+
+        # for sensor_name, sensor_values in sensor_dict.items():
+        #     sensor_position = sensor_values[0]
+        #     sensor_distance_reading = sensor_values[1]
 
         contact_x = sensor_position[0] + sensor_distance_reading * np.cos(sensor_position[2])
         contact_y = sensor_position[1] + sensor_distance_reading * np.sin(sensor_position[2])
         # Update the occupancy grid based on the onboard sensor position
-        grid_x, grid_y = self.world_to_grid(sensor_position[0], sensor_position[1])
-        if 0 <= grid_x < self.grid.shape[0] and 0 <= grid_y < self.grid.shape[1]:
-            self.grid[grid_x, grid_y] = 1
+        sensor_grid_x, sensor_grid_y = self.world_to_grid(sensor_position[0], sensor_position[1])
+        contact_grid_x, contact_grid_y = self.world_to_grid(contact_x, contact_y)
+
+        # Use Bresenham's Line Algorithm to mark all points between the sensor and contact point as unoccupied
+        line_points = self.bresenham(sensor_grid_x, sensor_grid_y, contact_grid_x, contact_grid_y)
+        for x, y in line_points:
+            if 0 <= y < self.grid.shape[0] and 0 <= x < self.grid.shape[1]:
+                self.grid[y, x] = 0  # Mark as unoccupied
+
+        # Mark the contact point as occupied
+        if 0 <= contact_grid_y < self.grid.shape[0] and 0 <= contact_grid_x < self.grid.shape[1]:
+            self.grid[contact_grid_y, contact_grid_x] = 1
+
 
     
     
