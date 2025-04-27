@@ -148,18 +148,26 @@ class parking_orchestrator:
         self.car_fiducial_num = car_fiducial_num
         self.fiducials_dict = global_fiducials_dict
         self.point_cloud = global_point_cloud
-        self.sensor_data = sensor_data = {'frontleft':.1, 'frontright':.1, 'left': .1}#global_sensor_data
+        self.sensor_data = sensor_data = {'frontleft':.2, 'frontright':.2, 'left': .2}#global_sensor_data
         self.goal_position = None
         self.non_relevant_tags = set([0,14,16])
         self.planned_short = False
         self.og = None
+        self.PointCloudParser = None
         self.path = None
         rospy.loginfo("\nsensor data: " + str(self.sensor_data))
 
-    def run_live(self, use_pc=True, use_onboard = False):
+    def run_live(self, use_pc=True, use_onboard = False, use_pc_only_once = False):
         plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(6,6))
+
+        
+            
+        refresh_pointcloud_on_iteration = True
         self.refresh(use_pc = use_pc, use_onboard = use_onboard)
+
+        if use_pc_only_once:
+            refresh_pointcloud_on_iteration = False
         
         self.grid_img = self.ax.imshow(
             self.og.get_grid(), cmap='Greys', origin='lower'
@@ -184,8 +192,9 @@ class parking_orchestrator:
             [x1,x1,xn,xn], [y1,yn,y1,yn], color='orange', s=50
         )
 
+
         while True:
-            self.refresh(use_pc = use_pc, use_onboard = use_onboard)
+            self.refresh(use_pc = use_pc, use_onboard = use_onboard, refresh_iteration_wtih_pc = refresh_pointcloud_on_iteration)
             if self.goal_position != None:
                 rospy.loginfo("Planning Path")
                 self.path = long_path_planning.plan(self.og, self.get_front_wheel_position(), self.goal_position)
@@ -210,24 +219,30 @@ class parking_orchestrator:
             rospy.loginfo("running simulation")
             create_sim(self.og, self.goal_position, self.path)
 
-    def refresh(self, use_pc = True, use_onboard = False):
+    def refresh(self, use_pc = True, use_onboard = False, refresh_iteration_wtih_pc = True):
+        #refresh_iteration_wtih_pc should current iteration be refreshed with onboard
         refresh_start= time.perf_counter()#start timer
     
         self.fiducials_dict = global_fiducials_dict
         if use_pc:
-            self.point_cloud = global_point_cloud
+            if refresh_iteration_wtih_pc:
+                self.point_cloud = global_point_cloud
         else:
             self.point_cloud= []
 
-        PointCloudParser = point_cloud_parser.PointCloudParser(self.point_cloud)
-        self.og = OccupancyGrid(PointCloudParser.get_point_cloud(), resolution=.01)
-        self.obstacle_fiducials_list = [value for key, value in self.fiducials_dict.items() if key != self.car_fiducial_num and key not in self.non_relevant_tags]
-        self.og.update_grid_from_fiducials(self.obstacle_fiducials_list)
-        self.og.remove_car_footprint(self.fiducials_dict[self.car_fiducial_num])
+        if refresh_iteration_wtih_pc:
+            self.PointCloudParser = point_cloud_parser.PointCloudParser(self.point_cloud)
+            self.og = OccupancyGrid(self.PointCloudParser.get_point_cloud(), resolution=.01)
+            self.obstacle_fiducials_list = [value for key, value in self.fiducials_dict.items() if key != self.car_fiducial_num and key not in self.non_relevant_tags]
+            self.og.update_grid_from_fiducials(self.obstacle_fiducials_list)
+
+            
+            self.og.remove_car_footprint(self.fiducials_dict[self.car_fiducial_num])
 
         #TODO
-        # if use_onboard:
-        #     self.update_grid_from_onboard()
+        if use_onboard:
+            #  self.sensor_data = global_sensor_data
+             self.og.update_grid_from_onboard(self.sensor_data, self.get_current_world_position())
 
         self.goal_position = self.identify_parking_space()
         refresh_end = time.perf_counter()#start timer
@@ -484,7 +499,7 @@ def main():
     rospy.Subscriber("/pico_data", String, pico_callback)
 
     # 4) Read car tag ID (default = 2)
-    car_fiducial_num = rospy.get_param("~car_fiducial_num", 2)
+    car_fiducial_num = rospy.get_param("~car_fiducial_num", 3)
 
     rate = rospy.Rate(10)
     rospy.loginfo("Waiting for initial data (point cloud and fiducial detections)...")
@@ -503,7 +518,7 @@ def main():
             )
 
             #orchestrator.run_simulation()
-            orchestrator.run_live(use_pc=True, use_onboard = True)
+            orchestrator.run_live(use_pc=True, use_onboard = True, use_pc_only_once=True)
             orchestrator_made = True
             break
         rate.sleep()

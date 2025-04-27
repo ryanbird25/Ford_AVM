@@ -173,28 +173,73 @@ class OccupancyGrid():
 
         return points
 
-    def update_grid_from_onboard(self, sensor_position, sensor_val):
+    def update_grid_from_onboard(self, sensor_data, car_center):
         #sensor_dict of type [(sensor_position(x,y,heading array), sensor_value)]
 
         # for sensor_name, sensor_values in sensor_dict.items():
         #     sensor_position = sensor_values[0]
         #     sensor_distance_reading = sensor_values[1]
 
-        contact_x = sensor_position[0] + sensor_distance_reading * np.cos(sensor_position[2])
-        contact_y = sensor_position[1] + sensor_distance_reading * np.sin(sensor_position[2])
-        # Update the occupancy grid based on the onboard sensor position
-        sensor_grid_x, sensor_grid_y = self.world_to_grid(sensor_position[0], sensor_position[1])
-        contact_grid_x, contact_grid_y = self.world_to_grid(contact_x, contact_y)
 
+
+        
+        for name, item in sensor_data.items():
+
+            x_offset = 0
+            y_offset = 0
+            heading_change = 0
+
+            if name == 'left':
+                x_offset = -.08
+                y_offset = -.05
+                heading_change = np.pi/2 +np.pi/2
+            elif name == 'frontleft':
+                x_offset = -.0575
+                y_offset = .18
+                heading_change = np.pi/6 +np.pi/2
+            elif name == "frontright":
+                x_offset = .0575
+                y_offset = .18
+                heading_change = -np.pi/6 +np.pi/2
+
+            
+            cx = car_center[0] + x_offset*np.cos(car_center[2]) - y_offset*np.sin(car_center[2])
+            cy =car_center[1] + x_offset*np.sin(car_center[2]) + y_offset*np.cos(car_center[2])
+            ch = car_center[2] + heading_change 
+
+            contact_x = (cx + (item) * np.cos(ch))
+            contact_y = (cy + (item) * np.sin(ch))
+            
+
+            sensor_grid_x = int(np.round(cx / self.resolution))
+            sensor_grid_y = int(np.round(cy / self.resolution))
+
+            contact_grid_x = int(np.round(contact_x / self.resolution))
+            contact_grid_y = int(np.round(contact_y / self.resolution))
+
+            half = 1
         # Use Bresenham's Line Algorithm to mark all points between the sensor and contact point as unoccupied
-        line_points = self.bresenham(sensor_grid_x, sensor_grid_y, contact_grid_x, contact_grid_y)
-        for x, y in line_points:
-            if 0 <= y < self.grid.shape[0] and 0 <= x < self.grid.shape[1]:
-                self.grid[y, x] = 0  # Mark as unoccupied
+            line_points = self.bresenham(sensor_grid_x, sensor_grid_y, contact_grid_x, contact_grid_y)
+               
+            for x, y in line_points:
+                for dx in range(-half, half+1):
+                    for dy in range(-half, half+1):
+                        xi, yi = x + dx, y + dy
+                        if 0 <= yi < self.grid.shape[0] and 0 <= xi < self.grid.shape[1]:
+                            self.grid[yi, xi] = 0
+            
+            # for x, y in line_points:
+            #     if 0 <= y < self.grid.shape[0] and 0 <= x < self.grid.shape[1]:
+            #         self.grid[y, x] = 0  # Mark as unoccupied
 
-        # Mark the contact point as occupied
-        if 0 <= contact_grid_y < self.grid.shape[0] and 0 <= contact_grid_x < self.grid.shape[1]:
-            self.grid[contact_grid_y, contact_grid_x] = 1
+            # # Mark the contact point as occupied
+            if 0 <= contact_grid_y < self.grid.shape[0] and 0 <= contact_grid_x < self.grid.shape[1]:
+                # self.grid[contact_grid_y, contact_grid_x] = 1
+                for dx in range(-half, half+1):
+                    for dy in range(-half, half+1):
+                        xi, yi = contact_grid_x + dx, contact_grid_y + dy
+                        if 0 <= yi < self.grid.shape[0] and 0 <= xi < self.grid.shape[1]:
+                            self.grid[yi, xi] = 1
 
 
     
