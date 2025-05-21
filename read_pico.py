@@ -1,7 +1,7 @@
 import requests
 import time
 
-PICO_IP = "192.168.137.11"
+PICO_IP = "192.168.137.152"
 url    = f"http://{PICO_IP}/data"
 
 # initialize with zeros (or None, or whatever makes sense)

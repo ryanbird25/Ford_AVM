@@ -2,15 +2,12 @@ from occupancy_grid import OccupancyGrid, og_coordinate
 from long_path_planning import path_to_driveable, AXIS_OF_ROTATION_FROM_CENTER_Y
 from simulate_path import create_sim
 import time
-from std_msgs.msg import String
-#from dataclasses import dataclass
-#from shapely.geometry import Polygon, Point
-#from shapely.affinity import rotate, translate
+from std_msgs.msg import String, PointCloud2
+
 import matplotlib.pyplot as plt
 
 import numpy as np
 import rospy
-from sensor_msgs.msg import PointCloud2
 import sensor_msgs.point_cloud2 as pc2
 from apriltag_ros.msg import AprilTagDetectionArray
 import long_path_planning
@@ -23,28 +20,33 @@ import tf2_ros
 import tf_conversions
 
 
+#Coordinates of the area previously designated to be the goal area for parking
+#which is a subset of the entire space the system covers
+#This is hardcoded and is the area that will be used to find a valid parking spot
 PARKING_STARTX =  .9#m
 PARKING_STARTY = .3 #m
 PARKING_ENDX = 1.43 #m
 PARKING_ENDY =  .8#m
 
+
+#Dimensions of the car used for overlaying and removing footprint of the car form the apriltag
 CAR_WIDTH = .14 #m
 CAR_LENGTH = .335 #m
-
 TAG_X_OFFSET_FROM_CENTER = 0 #m how far the center of the car is located from the tag center
-TAG_Y_OFFSET_FROM_CENTER = .07 #actually 6.87 but not divisible by grid resolution
-FAR_PARK_Y_OFFSET = 0.2 #m
+TAG_Y_OFFSET_FROM_CENTER = .07
+
+#This is the distance from the origin of the space to the origin of the apriltag that is used to
+#stitch the parking process
 X_origin_offset = .45
 Y_origin_offset = .69
 
+#These are the values that will be fetched from ros
 global_point_cloud = None
 global_fiducials_dict = {}   # maps tag_id -> np.array([x, y, yaw])
 global_tag_list = [] 
 global_sensor_data = {}
 
 
-#use fiducials to recreate space cars are occupying
-#grow the moving particle rather than the obstacles
 
 #on collinear points separate the distance by the turn radius that we are capable of
 def og_distance(og_coordinate1:og_coordinate, og_coordinate2:og_coordinate):
@@ -54,14 +56,10 @@ def og_distance(og_coordinate1:og_coordinate, og_coordinate2:og_coordinate):
 def point_cloud_callback(msg):
     global global_point_cloud
     points = pc2.read_points(msg, field_names=("x","y","z"), skip_nans=True)
-    # points = -points
-    # rospy.loginfo(points)
     global_point_cloud = np.array(list(points))
     global_point_cloud[:, 0] += X_origin_offset
     global_point_cloud[:,1] += Y_origin_offset
-    #rospy.loginfo(global_point_cloud[0])
-    # rospy.loginfo("Point cloud received.") #returns the point cloud
-   
+    
 tf_buffer   = None
 tf_listener = None  
 
@@ -77,19 +75,14 @@ def pico_callback(data):
         front = float(parts[0].split(": ")[1].replace(" cm", ""))
         back = float(parts[1].split(": ")[1].replace(" cm", ""))
         left = float(parts[2].split(": ")[1].replace(" cm", ""))
-
+        rospy.loginfo(f"left: {left} back: {back} front: {front}")
         # Update the global sensor_data dictionary
         global_sensor_data = {
-            'frontleft': front,
-            'frontright': back,
-            'left': left  # Adjust this according to the correct context for 'heading'
+            'frontleft': front/100,
+            'frontright': back/100,
+            'left': left/100  # Adjust this according to the correct context for 'heading'
         }
 
-        rospy.loginfo(f"Updated sensor data: {global_sensor_data}")
-
-        # Here, you could call the update method if orchestrator instance exists
-        # if orchestrator is not None:  # Check if orchestrator exists
-        #     orchestrator.og.update_grid_from_onboard(global_sensor_data)
 
     except Exception as e:
         rospy.logerr(f"Failed to parse data: {e}")
@@ -148,7 +141,7 @@ class parking_orchestrator:
         self.car_fiducial_num = car_fiducial_num
         self.fiducials_dict = global_fiducials_dict
         self.point_cloud = global_point_cloud
-        self.sensor_data = sensor_data = {'frontleft':.2, 'frontright':.2, 'left': .2}#global_sensor_data
+        self.sensor_data = global_sensor_data
         self.goal_position = None
         self.non_relevant_tags = set([0,14,16])
         self.planned_short = False
@@ -158,11 +151,13 @@ class parking_orchestrator:
         rospy.loginfo("\nsensor data: " + str(self.sensor_data))
 
     def run_live(self, use_pc=True, use_onboard = False, use_pc_only_once = False):
+        #This runs the system with the following options
+        #use_pc: use the point cloud data
+        #use_onboard: use the onboard data
+        #use_pc_only_once: use the point cloud data only once and then overwrite it with the onboard data
         plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(6,6))
-
         
-            
         refresh_pointcloud_on_iteration = True
         self.refresh(use_pc = use_pc, use_onboard = use_onboard)
 
@@ -176,14 +171,14 @@ class parking_orchestrator:
         self.goal_scatter      = self.ax.scatter([], [], color='green', s=5)
         self.path_scatter      = self.ax.scatter([], [], color='blue',  s=50)
         self.sensor_lines = {}
-        for name in self.sensor_data:
-        # 'o-' means a circle marker plus a line
+        self.sensor_lines = {}
+        for name in ("frontleft", "frontright", "left"):
             line, = self.ax.plot([], [], 'o-',
                                 markerfacecolor='orange',
                                 markeredgecolor='orange',
-                                markersize=5,     # approx s=50 in scatter
+                                markersize=5,
                                 linewidth=1,
-                                color='orange')
+                                color='orange'  )
             self.sensor_lines[name] = line
 
         x1, xn = int(PARKING_STARTX/self.og.resolution), (PARKING_ENDX/self.og.resolution)
@@ -205,6 +200,7 @@ class parking_orchestrator:
             self.update_constant_visual(use_pc=use_pc, show_path=True, show_sensors=use_onboard)
 
     def run_simulation(self):
+        #Gets path from the current position and creates a simulation video of the vehicle following the course
         self.refresh()
         
         self.visualize_path_and_og('grid', False, True)
@@ -219,14 +215,16 @@ class parking_orchestrator:
             rospy.loginfo("running simulation")
             create_sim(self.og, self.goal_position, self.path)
 
-    def refresh(self, use_pc = True, use_onboard = False, refresh_iteration_wtih_pc = True):
-        #refresh_iteration_wtih_pc should current iteration be refreshed with onboard
+    def refresh(self, use_onboard = False, refresh_iteration_wtih_pc = True):
+        #This function refreshes the occupancy grid and the point cloud
+        #use_onboard: use the onboard data
+        #refresh_iteration_wtih_pc: use the current occupancy grid and overwrite it with the onboard data
         refresh_start= time.perf_counter()#start timer
     
         self.fiducials_dict = global_fiducials_dict
-        if use_pc:
-            if refresh_iteration_wtih_pc:
-                self.point_cloud = global_point_cloud
+        
+        if refresh_iteration_wtih_pc:
+            self.point_cloud = global_point_cloud
         else:
             self.point_cloud= []
 
@@ -241,8 +239,20 @@ class parking_orchestrator:
 
         #TODO
         if use_onboard:
-            #  self.sensor_data = global_sensor_data
-             self.og.update_grid_from_onboard(self.sensor_data, self.get_current_world_position())
+            self.sensor_data = global_sensor_data
+            rospy.loginfo("SENSORD DATA: " + str(self.sensor_data))
+            if self.goal_position == None:
+                if "left" in self.sensor_data.keys():
+                    del self.sensor_data["left"]
+                    del self.sensor_data["frontright"]
+                    del self.sensor_data["frontleft"]
+            elif np.sqrt((self.goal_position.x - self.get_current_grid_position().x)**2 + (self.goal_position.y - self.get_current_grid_position().y)**2) > .5/self.og.resolution:
+                if "left" in self.sensor_data.keys():
+                    del self.sensor_data["left"]
+                    del self.sensor_data["frontright"]
+                    del self.sensor_data["frontleft"]
+
+            self.og.update_grid_from_onboard(self.sensor_data, self.get_current_world_position())
 
         self.goal_position = self.identify_parking_space()
         refresh_end = time.perf_counter()#start timer
@@ -250,7 +260,7 @@ class parking_orchestrator:
         rospy.loginfo(f"\n\n\nRefreshing Occupancy took {(refresh_end - refresh_start):.3f} seconds\n\n")
 
     def identify_parking_space(self):
-        #TODO GOAL POSITION returned should be the front  wheel positoni
+        #Identitfies open space within the predefined parking area
         rows = math.ceil(CAR_LENGTH / self.og.resolution)
         cols = math.ceil(CAR_WIDTH  / self.og.resolution)
 
@@ -274,6 +284,7 @@ class parking_orchestrator:
         return None
 
     def update_constant_visual(self, show_path=False, use_pc = True, show_sensors=False):
+        #Updates the live visual according to the parameters
         if use_pc:
             self.grid_img.set_data(self.og.get_grid())
         else:
@@ -309,6 +320,10 @@ class parking_orchestrator:
             self.goal_scatter.set_offsets(goal_pts)
 
         if show_sensors:
+            for name, line in self.sensor_lines.items():
+                if name not in self.sensor_data:
+                    line.set_data([], [])  
+
             for name, item in self.sensor_data.items():
                 x_offset = 0
                 y_offset = 0
@@ -316,7 +331,7 @@ class parking_orchestrator:
 
                 if name == 'left':
                     x_offset = -.08
-                    y_offset = -.05
+                    y_offset = .03
                     heading_change = np.pi/2 +np.pi/2
                 elif name == 'frontleft':
                     x_offset = -.0575
@@ -344,24 +359,19 @@ class parking_orchestrator:
 
                 line = self.sensor_lines.get(name)
                 if line:
-                    line.set_data(
-                        [sensor_grid_x, contact_grid_x],
-                        [sensor_grid_y, contact_grid_y]
-                    )
-
-                # rospy.loginfo("\nSENSOR X grid: " + str(sensor_grid_x))
-                # rospy.loginfo("\nSENSOR Y grid: " + str(sensor_grid_y))
-                # rospy.loginfo("\nCONTACT X grid: " + str(contact_grid_x))
-                # rospy.loginfo("\nCONTACT Y grid: " + str(contact_grid_y))
-
+                    if item <0:
+                        line.set_data([], [])  
+                    else:
+                        line.set_data(
+                            [sensor_grid_x, contact_grid_x],
+                            [sensor_grid_y, contact_grid_y]
+                        )
 
         self.fig.canvas.draw_idle()
         plt.pause(0.01)
 
     def visualize_path_and_og(self, file_name, show_path = False, show_current=False, show_sensor=False ):
-        
-        #visualize the occupancy grid and the path
-        # rospy.loginfo("Entered Visualizer")
+        #Save a snapshot of the current occupancy grid and path to a png
         fig, ax = plt.subplots()
         rospy.loginfo(global_fiducials_dict)
         # Display the grid
@@ -396,50 +406,6 @@ class parking_orchestrator:
                 x,y = gridx[i], gridy[i]
                 ax.scatter(x, y, color='green', s=5)
 
-        # if show_sensor:
-        #     sensor_data = {'frontleft':10, 'frontright':10, 'left': 10}
-        #     for name, item in sensor_data.items():
-        #         x_offset = 0
-        #         y_offset = 0
-        #         heading_change = 0
-        #         if name == 'left':
-        #             x_offset = .08
-        #             y_offset = -.05
-        #             heading_change = np.pi/2
-        #         elif name == 'frontleft':
-        #             x_offset = -.0575
-        #             y_offset = .18
-        #             heading_change = np.pi/6
-        #         elif name == "frontright":
-        #             x_offset = .0575
-        #             y_offset = .18
-        #             heading_change = -np.pi/6
-
-        #         car_center = self.get_current_world_position()
-        #         cx = x + x_offset*np.cos(car_center[2]) - y_offset*np.sin(car_center[2])
-        #         cy =y + x_offset*np.sin(car_center[2]) + y_offset*np.cos(car_center[2])
-        #         ch = car_center[2] + heading_change
-        #         #done because sensor data reported in cm
-        #         contact_x = (cx + (item/100) * np.cos(ch))/100
-        #         contact_y = (cy + (item/100) * np.sin(ch))/100
-                
-        #         # Update the occupancy grid based on the onboard sensor position
-
-        #         sensor_grid_x = int(np.round(cx / self.og.resolution))
-        #         sensor_grid_y = int(np.round(cy / self.og.resolution))
-
-        #         contact_grid_x = int(np.round(contact_x / self.og.resolution))
-        #         contact_grid_y = int(np.round(contact_y / self.og.resolution))
-
-        #         # sensor_grid_x, sensor_grid_y = self.og.world_to_grid(cx, cy)
-        #         # contact_grid_x, contact_grid_y = self.og.world_to_grid(contact_x, contact_y)
-        #         # rospy.loginfo(contact_grid_x, contact_grid_y)
-        #         rospy.loginfo("\nSENSOR X grid: " + str(sensor_grid_x))
-        #         rospy.loginfo("\nSENSOR Y grid: " + str(sensor_grid_y))
-        #         rospy.loginfo("\nCONTACT X grid: " + str(contact_grid_x))
-        #         rospy.loginfo("\nCONTACT Y grid: " + str(contact_grid_y))
-        #         ax.plot([sensor_grid_x, contact_grid_x], [sensor_grid_y, contact_grid_y])
-
         
         rospy.loginfo("past show goal")
         x1, xn = int(PARKING_STARTX/self.og.resolution), (PARKING_ENDX/self.og.resolution)
@@ -452,12 +418,9 @@ class parking_orchestrator:
         
         plt.savefig(file_name + ".png")
         
-    def send_next_motion_command(self):
-        pass
 
     def get_current_grid_position(self) -> og_coordinate:
-        #Get the grid coordinate pertaining to car's april tag
-
+        #Get the grid position of the car's center from the fiducial position and known tag offset
         car_x, car_y, car_heading = self.fiducials_dict[self.car_fiducial_num]
         grid_x, grid_y = self.og.world_to_grid(car_x - TAG_Y_OFFSET_FROM_CENTER * np.sin(car_heading), car_y + TAG_Y_OFFSET_FROM_CENTER * np.cos(car_heading))
 
@@ -465,18 +428,15 @@ class parking_orchestrator:
         return og_coordinate(grid_x, grid_y, self.fiducials_dict[self.car_fiducial_num][2])
     
     def get_front_wheel_position(self) -> og_coordinate:
-        #Get the grid coordinate pertaining to car's april tag
-
+        #Get the grid position of the car's front wheel(its axis of rotation) from the fiducial position and known tag offset
         car_x, car_y, car_heading = self.fiducials_dict[self.car_fiducial_num]
         offset = TAG_Y_OFFSET_FROM_CENTER + AXIS_OF_ROTATION_FROM_CENTER_Y
         grid_x, grid_y = self.og.world_to_grid(car_x - offset * np.sin(car_heading), car_y + offset * np.cos(car_heading))
         
-
         return og_coordinate(grid_x, grid_y, self.fiducials_dict[self.car_fiducial_num][2])
 
     def get_current_world_position(self): 
-        #Get the world coordinate of the car's center
-
+        #Get the grid position of the car's center from the fiducial position and known tag offset
         car_x, car_y, car_heading = self.fiducials_dict[self.car_fiducial_num]
         car_x_center = car_x - TAG_Y_OFFSET_FROM_CENTER * np.sin(car_heading)
         car_y_center = car_y + TAG_Y_OFFSET_FROM_CENTER * np.cos(car_heading)
@@ -499,7 +459,7 @@ def main():
     rospy.Subscriber("/pico_data", String, pico_callback)
 
     # 4) Read car tag ID (default = 2)
-    car_fiducial_num = rospy.get_param("~car_fiducial_num", 3)
+    car_fiducial_num = rospy.get_param("~car_fiducial_num", 1)
 
     rate = rospy.Rate(10)
     rospy.loginfo("Waiting for initial data (point cloud and fiducial detections)...")
@@ -517,7 +477,6 @@ def main():
                 global_sensor_data
             )
 
-            #orchestrator.run_simulation()
             orchestrator.run_live(use_pc=True, use_onboard = True, use_pc_only_once=True)
             orchestrator_made = True
             break

@@ -21,10 +21,8 @@ class og_coordinate():
     heading: float#excecuted in this order
 
     def __post_init__(self):
-    
-    # 1) round to 1 decimal
+        # Normalize the heading to be within the range [-pi, pi], also some rounding
         h = round(self.heading, 1)
-        # 2) if you hit *any* flavor of π, snap to −π
         if abs(abs(h) - np.pi) < 0.05:
             h = -np.pi
         self.heading = h
@@ -64,8 +62,7 @@ class OccupancyGrid():
         return grid_x, grid_y
     
     def get_car_footprint_from_tag_pos(self, car_position, offset = 0, res_increase=1):
-        #car position is 3 item array
-        #input is global position of the tag
+        #Get set of x and y points that make up the cars footprint
         car_x, car_y, car_heading = car_position[0], car_position[1], car_position[2]
 
         car_x_center = car_x - TAG_Y_OFFSET_FROM_CENTER * np.sin(car_heading)
@@ -93,8 +90,7 @@ class OccupancyGrid():
         return grid_x, grid_y
 
     def get_car_footprint_from_center(self, car_position, offset = 0, res_increase=1):
-        #car position is 3 item array
-        #input is global position of the tag
+        #Get set of x and y points that make up the cars footprint
         car_x_center, car_y_center, car_heading = car_position[0], car_position[1], car_position[2]
 
         dx = np.arange(-CAR_WIDTH / 2 - offset, CAR_WIDTH / 2 + offset + self.resolution, self.resolution/res_increase)
@@ -119,7 +115,7 @@ class OccupancyGrid():
         return grid_x, grid_y
     
     def update_grid_from_fiducials(self, fiducials_poses: list):
-        # Update the occupancy grid based on fiducials
+        # Update the occupancy grid based on fiducials positions of obstacle cars
         for pose in fiducials_poses:
             xs, ys = self.get_car_footprint_from_tag_pos(pose)
 
@@ -152,6 +148,8 @@ class OccupancyGrid():
                 self.grid[y][x] = 1
 
     def bresenham(self, x0, y0, x1, y1):
+        # Bresenham's Line Algorithm to get all points between two coordinates
+        # Returns a list of points (x, y) between (x0, y0) and (x1, y1)
         points = []
         dx = abs(x1 - x0)
         dy = abs(y1 - y0)
@@ -174,15 +172,10 @@ class OccupancyGrid():
         return points
 
     def update_grid_from_onboard(self, sensor_data, car_center):
-        #sensor_dict of type [(sensor_position(x,y,heading array), sensor_value)]
+        # Update the occupancy grid based on the sensor data
+        # sensor_data is a dictionary with keys 'left', 'frontleft', 'frontright' and values are distances
+        # car_center is a list with the car's position [x, y, heading]
 
-        # for sensor_name, sensor_values in sensor_dict.items():
-        #     sensor_position = sensor_values[0]
-        #     sensor_distance_reading = sensor_values[1]
-
-
-
-        
         for name, item in sensor_data.items():
 
             x_offset = 0
@@ -191,7 +184,7 @@ class OccupancyGrid():
 
             if name == 'left':
                 x_offset = -.08
-                y_offset = -.05
+                y_offset = .03
                 heading_change = np.pi/2 +np.pi/2
             elif name == 'frontleft':
                 x_offset = -.0575
@@ -228,10 +221,6 @@ class OccupancyGrid():
                         if 0 <= yi < self.grid.shape[0] and 0 <= xi < self.grid.shape[1]:
                             self.grid[yi, xi] = 0
             
-            # for x, y in line_points:
-            #     if 0 <= y < self.grid.shape[0] and 0 <= x < self.grid.shape[1]:
-            #         self.grid[y, x] = 0  # Mark as unoccupied
-
             # # Mark the contact point as occupied
             if 0 <= contact_grid_y < self.grid.shape[0] and 0 <= contact_grid_x < self.grid.shape[1]:
                 # self.grid[contact_grid_y, contact_grid_x] = 1

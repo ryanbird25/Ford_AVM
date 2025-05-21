@@ -2,10 +2,9 @@
 
 import rospy
 import requests
-import time
 from std_msgs.msg import String
 
-PICO_IP = "192.168.137.53"
+PICO_IP = "192.168.137.34"
 url = f"http://{PICO_IP}/data"
 
 def main():
@@ -14,27 +13,32 @@ def main():
 
     # Create a publisher for the 'pico_data' topic
     pub = rospy.Publisher('pico_data', String, queue_size=10)
+    rate = rospy.Rate(1)  # Hz
 
-    rate = rospy.Rate(1)  # Set the loop rate to 1 Hz
+    # keep track of the last‐good reading
+    last_data = {"front": 0.0, "back": 0.0, "left": 0.0}
 
     while not rospy.is_shutdown():
         try:
-            res = requests.get(url)
-            data = res.json()
+            res = requests.get(url, timeout=1)
+            res.raise_for_status()            # HTTP errors → RequestException
+            data = res.json()                 # ValueError on bad JSON
+            last_data = data                  # update only on full success
+        except ValueError:
+            pass
+        except requests.RequestException as e:
+            pass
 
-            # Create a message to publish
-            message = f"Front: {data['front']:.2f} cm, Back: {data['back']:.2f} cm, Left: {data['left']:.2f} cm"
+        # build & publish from last_data regardless of success/failure
+        msg = (
+            f"Front: {last_data['front']:.2f} cm, "
+            f"Back:  {last_data['back']:.2f} cm, "
+            f"Left:  {last_data['left']:.2f} cm"
+        )
+        pub.publish(msg)
+        rospy.loginfo(msg)
 
-            # Publish the data
-            pub.publish(message)
-
-            # Log the data to console
-            rospy.loginfo(message)
-
-        except Exception as e:
-            rospy.logerr("Request failed: %s" % e)
-
-        rate.sleep()  # Sleep to maintain the loop rate
+        rate.sleep()
 
 if __name__ == '__main__':
     try:
